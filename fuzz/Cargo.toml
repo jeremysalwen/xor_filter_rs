@@ -1,0 +1,26 @@
+
+[package]
+name = "xor_filter-fuzz"
+version = "0.0.1"
+authors = ["Automatically generated"]
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies.xor_filter]
+path = ".."
+[dependencies.libfuzzer-sys]
+git = "https://github.com/rust-fuzz/libfuzzer-sys.git"
+[dependencies]
+arbitrary = "0.2.0"
+log = "0.4.0"
+env_logger = "0.6.0"
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "i64_test"
+path = "fuzz_targets/i64_test.rs"
