@@ -22,11 +22,16 @@
 //! set membership datastructure that is faster and smaller than Bloom
 //! Filters and Cuckoo Filters. The only downside is that they are
 //! immutable once constructed.
-//! 
+//!
 //! This implementation has been unit tested, but still needs to be
 //! subjected to a battery of statistical tests. Performance has also
 //! not been rigorously measured.
 #![warn(missing_docs)]
+
+#[cfg(any(test, fuzzing))]
+extern crate more_asserts;
+#[cfg(any(test, fuzzing))]
+extern crate statrs;
 
 use linked_hash_set::LinkedHashSet;
 use num::Bounded;
@@ -39,7 +44,6 @@ use std::hash::Hash;
 use std::hash::Hasher;
 use std::marker::PhantomData;
 use std::ops::BitXor;
-
 use std::ops::BitXorAssign;
 
 /// An XorFilter is an approximate set membership datastructure.
@@ -450,7 +454,8 @@ pub mod test_util {
 /// Proper, rigorous testing of the statistical properties of this implementation is
 /// still required.
 #[cfg(test)]
-mod tests {
+pub mod tests {
+
     #[test]
     fn randos() {
         super::test_util::test_construction(&vec![6, 23523, 43, 8, 345], &vec![1, 586, 5, 34, 7]);
@@ -477,11 +482,110 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_fuzzed1() {
-        super::test_util::test_construction(
-            &vec![4785074604081152 as i64, 0],
-            &vec![-6917518032524803957],
-        );
+    #[cfg(any(test, fuzzing))]
+    pub mod statistical {
+
+        use statrs::function::erf::erf_inv;
+        use more_asserts::assert_lt;
+        use bolero::check;
+        
+        /// Returns the required sample size for a one-sided binomial test with
+        /// specified false positive and false negative rates.
+        ///
+        /// Uses the normal approximation of the binomial with the continuity
+        /// correction, and so is not exact, especially for small n
+        pub fn normal_approx_sample_size(
+            p0: f64,
+            p1: f64,
+            false_positive_rate: f64,
+            false_negative_rate: f64,
+        ) -> (u64, u64) {
+            let b0 = (2.0 * p0 * (1.0 - p0)).sqrt() * erf_inv(2.0 * false_positive_rate - 1.0);
+            let b1 = (2.0 * p1 * (1.0 - p1)).sqrt() * erf_inv(2.0 * false_negative_rate - 1.0);
+            let b = b0 + b1;
+            let n = (b / (p1 - p0)).powi(2).ceil();
+            let k = (-n.sqrt() * b0 + 0.5 + n * p0).round();
+            let k2 = n.sqrt() * b1 + 0.5 + n * p1;
+            println!("{} {} {} {}", p0, p1, false_positive_rate, false_negative_rate);
+            println!("OK n {} k0 {} k1 {}", n, k, k2);
+            return (n as u64, k as u64);
+        }
+
+        fn required_sample_size(
+            p0: f64,
+            p1: f64,
+            false_positive_rate: f64,
+            false_negative_rate: f64,
+        ) -> (u64, u64) {
+            let (mut n, mut k) =
+                normal_approx_sample_size(p0, p1, false_positive_rate, false_negative_rate);
+            //if check(n,k,p0,p1, false_positive_rate, false_negative_rate) {
+            //    return (n,k);
+            //}
+            return (n, k);
+        }
+
+        /// Checks the sanity of the output of the normal approximation.
+        ///
+        /// This checks that the power and p-value of for the normal approximation
+        /// of the binomial satisfy the false_positive and false_negative
+        /// constraints required.  This must hold true, because solving these
+        /// constraints on the normal approximation is the basis for the sample
+        /// size calculation algorithm.
+        fn assert_normal_approx_satisfied(
+            n: u64,
+            k: u64,
+            p0: f64,
+            p1: f64,
+            false_positive_rate: f64,
+            false_negative_rate: f64,
+        ) {
+            let nf = n as f64;
+            // We add a margin of 0.5, due to potential rounding.
+            let k0 = k as f64 + 0.5;
+            let k1 = k as f64 - 0.5;
+            let approx_false_positive = 0.5
+                * (1.0
+                    + statrs::function::erf::erf(
+                        (0.5 - k0 + nf * p0) / (2.0 * nf * p0 * (1.0 - p0)).sqrt(),
+                    ));
+            let approx_false_negative = 0.5
+                * (1.0
+                    + statrs::function::erf::erf(
+                        (-0.5 + k1 - nf * p1) / (2.0 * nf * p1 * (1.0 - p1)).sqrt(),
+                    ));
+            println!(
+                "n {} k {} approx fp {} approx fn {}",
+                n, k, approx_false_positive, approx_false_negative
+            );
+            assert_lt!(approx_false_positive, false_positive_rate);
+            assert_lt!(approx_false_negative, false_negative_rate);
+        }
+
+        #[test]
+        fn test_normal_approx_sample_size() {
+            let p0 = 0.1;
+            let p1 = 0.15;
+            let false_positive_rate = 0.05;
+            let false_negative_rate = 0.05;
+            let (n, k) =
+                normal_approx_sample_size(p0, p1, false_positive_rate, false_negative_rate);
+            assert_normal_approx_satisfied(n, k, p0, p1, false_positive_rate, false_negative_rate);
+            assert_eq!((n, k), (468, 58));
+        }
+
+        #[test]
+        fn normal_approx_property_test() {
+                check!(for (mut p0,mut p1, fpr, fnr) in all((gen::<f64>(), gen::<f64>(), gen::<f64>().with()
+                .bounds(0..1.0), gen::<f64>())) {
+                // Make sure p1 is bigger.
+                if p1<p0 {
+                    std::mem::swap(&mut p0, &mut p1);
+                }
+                let (n, k) =
+                normal_approx_sample_size(p0, p1, fpr, fnr);
+                assert_normal_approx_satisfied(n, k, p0, p1, fpr, fnr);
+            });
+        }
     }
 }

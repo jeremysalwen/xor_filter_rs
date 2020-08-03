@@ -24,3 +24,7 @@ members = ["."]
 [[bin]]
 name = "i64_test"
 path = "fuzz_targets/i64_test.rs"
+
+[[bin]]
+name = "sample_size"
+path = "fuzz_targets/sample_size.rs"
